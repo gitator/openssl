@@ -139,6 +139,7 @@ int MAIN(int argc, char **argv)
     char *signfile = NULL, *keyfile = NULL;
     char *rsignfile = NULL, *rkeyfile = NULL;
     char *outfile = NULL;
+    char *requestor = NULL, *requestorType = NULL;
     int add_nonce = 1, noverify = 0, use_ssl = -1;
     STACK_OF(CONF_VALUE) *headers = NULL;
     OCSP_REQUEST *req = NULL;
@@ -294,6 +295,21 @@ int MAIN(int argc, char **argv)
                 signfile = *args;
             } else
                 badarg = 1;
+        } else if (!strcmp(*args, "-requestor")) {
+                if (args[1]) {
+                   args++;
+                   requestor = *args;
+                }
+
+                if ((requestorType=strchr(requestor, ':'))) {
+
+                   if ( requestorType[1] ){
+                      requestorType[0]='\0';
+                      requestorType++;
+                   }
+
+                } else
+                   badarg = 1;
         } else if (!strcmp(*args, "-VAfile")) {
             if (args[1]) {
                 args++;
@@ -503,6 +519,14 @@ int MAIN(int argc, char **argv)
         BIO_printf(bio_err,
                    "-signer file         certificate to sign OCSP request with\n");
         BIO_printf(bio_err,
+                   "-requestor          requestor to use, syntax: VALUE:TYPE\n");
+        BIO_printf(bio_err,
+                   "                     example: uji.sso:email\n");
+        BIO_printf(bio_err,
+                   "                     VALUE: any string\n");
+        BIO_printf(bio_err,
+                   "                     TYPE: uri | email | dns | rid | ipadd | dirname\n");
+        BIO_printf(bio_err,
                    "-signkey file        private key to sign OCSP request with\n");
         BIO_printf(bio_err,
                    "-sign_other file     additional certificates to include in signed request\n");
@@ -692,11 +716,20 @@ int MAIN(int argc, char **argv)
         if (!key)
             goto end;
 
-        if (!OCSP_request_sign
-            (req, signer, key, NULL, sign_other, sign_flags)) {
-            BIO_printf(bio_err, "Error signing OCSP request\n");
-            goto end;
+        if ( requestor ) {
+           if (!OCSP_request_sign_custom_requestor
+              (req, signer, key, NULL, sign_other, sign_flags, requestor, requestorType)) {
+              BIO_printf(bio_err, "Error signing OCSP request (requestor: %s, requestor type: %s)\n", requestor, requestorType);
+              goto end;
+           }
+        } else {
+           if (!OCSP_request_sign_default_requestor
+              (req, signer, key, NULL, sign_other, sign_flags)) {
+              BIO_printf(bio_err, "Error signing OCSP request\n");
+              goto end;
+           }
         }
+
     }
 
     if (req_text && req)

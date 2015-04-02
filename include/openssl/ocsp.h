@@ -244,6 +244,7 @@ int OCSP_check_nonce(OCSP_REQUEST *req, OCSP_BASICRESP *bs);
 int OCSP_copy_nonce(OCSP_BASICRESP *resp, OCSP_REQUEST *req);
 
 int OCSP_request_set1_name(OCSP_REQUEST *req, X509_NAME *nm);
+int OCSP_request_set1_name_with_requestor(OCSP_REQUEST *req, char *requestorName, char *requestorType);
 int OCSP_request_add1_cert(OCSP_REQUEST *req, X509 *cert);
 
 int OCSP_request_sign(OCSP_REQUEST *req,
@@ -251,6 +252,19 @@ int OCSP_request_sign(OCSP_REQUEST *req,
                       EVP_PKEY *key,
                       const EVP_MD *dgst,
                       STACK_OF(X509) *certs, unsigned long flags);
+
+int OCSP_request_sign_default_requestor(OCSP_REQUEST *req,
+                                        X509 *signer,
+                                        EVP_PKEY *key,
+                                        const EVP_MD *dgst,
+                                        STACK_OF(X509) *certs, unsigned long flags);
+
+int OCSP_request_sign_custom_requestor(OCSP_REQUEST *req,
+                                       X509 *signer,
+                                       EVP_PKEY *key,
+                                       const EVP_MD *dgst,
+                                       STACK_OF(X509) *certs, unsigned long flags,
+                                       char *requestorName, char * requestorType);
 
 int OCSP_response_status(OCSP_RESPONSE *resp);
 OCSP_BASICRESP *OCSP_response_get1_basic(OCSP_RESPONSE *resp);

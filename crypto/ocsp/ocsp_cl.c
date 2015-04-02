@@ -142,25 +142,54 @@ int OCSP_request_add1_cert(OCSP_REQUEST *req, X509 *cert)
     return 1;
 }
 
-/*
- * Sign an OCSP request set the requestorName to the subjec name of an
- * optional signers certificate and include one or more optional certificates
- * in the request. Behaves like PKCS7_sign().
- */
+
+int OCSP_request_set1_name_with_requestor(OCSP_REQUEST *req, char *requestorName, char *requestorType)
+{
+
+	GENERAL_NAME *gen;
+	int gen_type;
+
+	if ( !strcmp(requestorType, "uri") ) {
+		gen_type = GEN_URI;
+	} else if ( !strcmp(requestorType, "email") ) {
+		gen_type = GEN_EMAIL;
+	} else if ( !strcmp(requestorType, "dns") ) {
+		gen_type = GEN_DNS;
+	} else if ( !strcmp(requestorType, "rid") ) {
+		gen_type = GEN_RID;
+	} else if ( !strcmp(requestorType, "ipadd") ) {
+		gen_type = GEN_IPADD;
+	} else if ( !strcmp(requestorType, "dirname") ) {
+        gen_type = GEN_DIRNAME;
+    } else {
+        return 0;
+    }
+
+    gen = a2i_GENERAL_NAME(NULL,NULL,NULL, gen_type, requestorName, 0);
+
+    if (!gen)
+        return 0;
+
+    if (req->tbsRequest->requestorName)
+        GENERAL_NAME_free(req->tbsRequest->requestorName);
+
+    req->tbsRequest->requestorName = gen;
+
+        return 1;
+
+}
 
 int OCSP_request_sign(OCSP_REQUEST *req,
-                      X509 *signer,
-                      EVP_PKEY *key,
-                      const EVP_MD *dgst,
-                      STACK_OF(X509) *certs, unsigned long flags)
+        X509 *signer,
+        EVP_PKEY *key,
+        const EVP_MD *dgst,
+        STACK_OF(X509) *certs, unsigned long flags)
 {
     int i;
+    OCSP_SIGNATURE *sig;
     X509 *x;
 
-    if (!OCSP_request_set1_name(req, X509_get_subject_name(signer)))
-        goto err;
-
-    if (!(req->optionalSignature = OCSP_SIGNATURE_new()))
+    if (!(req->optionalSignature = sig = OCSP_SIGNATURE_new()))
         goto err;
     if (key) {
         if (!X509_check_private_key(signer, key)) {
@@ -183,7 +212,56 @@ int OCSP_request_sign(OCSP_REQUEST *req,
     }
 
     return 1;
- err:
+err:
+    OCSP_SIGNATURE_free(req->optionalSignature);
+    req->optionalSignature = NULL;
+    return 0;
+}
+
+/*
+ * Same functionality as OCSP_request_sign_default_requestor but using a 
+ * customized requestorName.
+ */
+
+int OCSP_request_sign_custom_requestor(OCSP_REQUEST *req,
+        X509 *signer,
+        EVP_PKEY *key,
+        const EVP_MD *dgst,
+        STACK_OF(X509) *certs, unsigned long flags,
+        char *requestorName, char * requestorType)
+{
+
+    if (!OCSP_request_set1_name_with_requestor(req, requestorName, requestorType))
+        goto err;
+
+    return OCSP_request_sign(req, signer, key, dgst, certs, flags);
+
+err:
+    OCSP_SIGNATURE_free(req->optionalSignature);
+    req->optionalSignature = NULL;
+    return 0;
+
+}
+
+/*
+ * Sign an OCSP request set the requestorName to the subjec name of an
+ * optional signers certificate and include one or more optional certificates
+ * in the request. Behaves like PKCS7_sign().
+ */
+
+int OCSP_request_sign_default_requestor(OCSP_REQUEST *req,
+        X509 *signer,
+        EVP_PKEY *key,
+        const EVP_MD *dgst,
+        STACK_OF(X509) *certs, unsigned long flags)
+{
+
+    if (!OCSP_request_set1_name(req, X509_get_subject_name(signer)))
+        goto err;
+printf("OCSP_request_sign_default_requestor\n");
+    return OCSP_request_sign(req, signer, key, dgst, certs, flags);
+
+err:
     OCSP_SIGNATURE_free(req->optionalSignature);
     req->optionalSignature = NULL;
     return 0;
