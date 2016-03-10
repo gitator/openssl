@@ -1,0 +1,250 @@
+From 1f633eb60834fb28a83efc16f7a3576634f89c1b Mon Sep 17 00:00:00 2001
+From: Toni Garcia <Antonio.Garcia@uji.es>
+Date: Thu, 2 Apr 2015 14:50:02 +0200
+Subject: [PATCH] Added custom: requestor Name
+
+---
+ apps/ocsp.c            |  41 +++++++++++++++++--
+ crypto/ocsp/ocsp_cl.c  | 106 ++++++++++++++++++++++++++++++++++++++++++-------
+ include/openssl/ocsp.h |  14 +++++++
+ 3 files changed, 143 insertions(+), 18 deletions(-)
+
+diff --git a/apps/ocsp.c b/apps/ocsp.c
+index 9538096..7ad81f7 100644
+--- a/apps/ocsp.c
++++ b/apps/ocsp.c
+@@ -139,6 +139,7 @@ int MAIN(int argc, char **argv)
+     char *signfile = NULL, *keyfile = NULL;
+     char *rsignfile = NULL, *rkeyfile = NULL;
+     char *outfile = NULL;
++    char *requestor = NULL, *requestorType = NULL;
+     int add_nonce = 1, noverify = 0, use_ssl = -1;
+     STACK_OF(CONF_VALUE) *headers = NULL;
+     OCSP_REQUEST *req = NULL;
+@@ -294,6 +295,21 @@ int MAIN(int argc, char **argv)
+                 signfile = *args;
+             } else
+                 badarg = 1;
++        } else if (!strcmp(*args, "-requestor")) {
++                if (args[1]) {
++                   args++;
++                   requestor = *args;
++                }
++
++                if ((requestorType=strchr(requestor, ':'))) {
++
++                   if ( requestorType[1] ){
++                      requestorType[0]='\0';
++                      requestorType++;
++                   }
++
++                } else
++                   badarg = 1;
+         } else if (!strcmp(*args, "-VAfile")) {
+             if (args[1]) {
+                 args++;
+@@ -503,6 +519,14 @@ int MAIN(int argc, char **argv)
+         BIO_printf(bio_err,
+                    "-signer file         certificate to sign OCSP request with\n");
+         BIO_printf(bio_err,
++                   "-requestor          requestor to use, syntax: VALUE:TYPE\n");
++        BIO_printf(bio_err,
++                   "                     example: uji.sso:email\n");
++        BIO_printf(bio_err,
++                   "                     VALUE: any string\n");
++        BIO_printf(bio_err,
++                   "                     TYPE: uri | email | dns | rid | ipadd | dirname\n");
++        BIO_printf(bio_err,
+                    "-signkey file        private key to sign OCSP request with\n");
+         BIO_printf(bio_err,
+                    "-sign_other file     additional certificates to include in signed request\n");
+@@ -692,11 +716,20 @@ int MAIN(int argc, char **argv)
+         if (!key)
+             goto end;
+ 
+-        if (!OCSP_request_sign
+-            (req, signer, key, NULL, sign_other, sign_flags)) {
+-            BIO_printf(bio_err, "Error signing OCSP request\n");
+-            goto end;
++        if ( requestor ) {
++           if (!OCSP_request_sign_custom_requestor
++              (req, signer, key, NULL, sign_other, sign_flags, requestor, requestorType)) {
++              BIO_printf(bio_err, "Error signing OCSP request (requestor: %s, requestor type: %s)\n", requestor, requestorType);
++              goto end;
++           }
++        } else {
++           if (!OCSP_request_sign_default_requestor
++              (req, signer, key, NULL, sign_other, sign_flags)) {
++              BIO_printf(bio_err, "Error signing OCSP request\n");
++              goto end;
++           }
+         }
++
+     }
+ 
+     if (req_text && req)
+diff --git a/crypto/ocsp/ocsp_cl.c b/crypto/ocsp/ocsp_cl.c
+index 78d817d..294541e 100644
+--- a/crypto/ocsp/ocsp_cl.c
++++ b/crypto/ocsp/ocsp_cl.c
+@@ -142,25 +142,54 @@ int OCSP_request_add1_cert(OCSP_REQUEST *req, X509 *cert)
+     return 1;
+ }
+ 
+-/*
+- * Sign an OCSP request set the requestorName to the subjec name of an
+- * optional signers certificate and include one or more optional certificates
+- * in the request. Behaves like PKCS7_sign().
+- */
++
++int OCSP_request_set1_name_with_requestor(OCSP_REQUEST *req, char *requestorName, char *requestorType)
++{
++
++	GENERAL_NAME *gen;
++	int gen_type;
++
++	if ( !strcmp(requestorType, "uri") ) {
++		gen_type = GEN_URI;
++	} else if ( !strcmp(requestorType, "email") ) {
++		gen_type = GEN_EMAIL;
++	} else if ( !strcmp(requestorType, "dns") ) {
++		gen_type = GEN_DNS;
++	} else if ( !strcmp(requestorType, "rid") ) {
++		gen_type = GEN_RID;
++	} else if ( !strcmp(requestorType, "ipadd") ) {
++		gen_type = GEN_IPADD;
++	} else if ( !strcmp(requestorType, "dirname") ) {
++        gen_type = GEN_DIRNAME;
++    } else {
++        return 0;
++    }
++
++    gen = a2i_GENERAL_NAME(NULL,NULL,NULL, gen_type, requestorName, 0);
++
++    if (!gen)
++        return 0;
++
++    if (req->tbsRequest->requestorName)
++        GENERAL_NAME_free(req->tbsRequest->requestorName);
++
++    req->tbsRequest->requestorName = gen;
++
++        return 1;
++
++}
+ 
+ int OCSP_request_sign(OCSP_REQUEST *req,
+-                      X509 *signer,
+-                      EVP_PKEY *key,
+-                      const EVP_MD *dgst,
+-                      STACK_OF(X509) *certs, unsigned long flags)
++        X509 *signer,
++        EVP_PKEY *key,
++        const EVP_MD *dgst,
++        STACK_OF(X509) *certs, unsigned long flags)
+ {
+     int i;
++    OCSP_SIGNATURE *sig;
+     X509 *x;
+ 
+-    if (!OCSP_request_set1_name(req, X509_get_subject_name(signer)))
+-        goto err;
+-
+-    if (!(req->optionalSignature = OCSP_SIGNATURE_new()))
++    if (!(req->optionalSignature = sig = OCSP_SIGNATURE_new()))
+         goto err;
+     if (key) {
+         if (!X509_check_private_key(signer, key)) {
+@@ -183,7 +212,56 @@ int OCSP_request_sign(OCSP_REQUEST *req,
+     }
+ 
+     return 1;
+- err:
++err:
++    OCSP_SIGNATURE_free(req->optionalSignature);
++    req->optionalSignature = NULL;
++    return 0;
++}
++
++/*
++ * Same functionality as OCSP_request_sign_default_requestor but using a 
++ * customized requestorName.
++ */
++
++int OCSP_request_sign_custom_requestor(OCSP_REQUEST *req,
++        X509 *signer,
++        EVP_PKEY *key,
++        const EVP_MD *dgst,
++        STACK_OF(X509) *certs, unsigned long flags,
++        char *requestorName, char * requestorType)
++{
++
++    if (!OCSP_request_set1_name_with_requestor(req, requestorName, requestorType))
++        goto err;
++
++    return OCSP_request_sign(req, signer, key, dgst, certs, flags);
++
++err:
++    OCSP_SIGNATURE_free(req->optionalSignature);
++    req->optionalSignature = NULL;
++    return 0;
++
++}
++
++/*
++ * Sign an OCSP request set the requestorName to the subjec name of an
++ * optional signers certificate and include one or more optional certificates
++ * in the request. Behaves like PKCS7_sign().
++ */
++
++int OCSP_request_sign_default_requestor(OCSP_REQUEST *req,
++        X509 *signer,
++        EVP_PKEY *key,
++        const EVP_MD *dgst,
++        STACK_OF(X509) *certs, unsigned long flags)
++{
++
++    if (!OCSP_request_set1_name(req, X509_get_subject_name(signer)))
++        goto err;
++printf("OCSP_request_sign_default_requestor\n");
++    return OCSP_request_sign(req, signer, key, dgst, certs, flags);
++
++err:
+     OCSP_SIGNATURE_free(req->optionalSignature);
+     req->optionalSignature = NULL;
+     return 0;
+diff --git a/include/openssl/ocsp.h b/include/openssl/ocsp.h
+index ab45db4..9d3caab 100644
+--- a/include/openssl/ocsp.h
++++ b/include/openssl/ocsp.h
+@@ -244,6 +244,7 @@ int OCSP_check_nonce(OCSP_REQUEST *req, OCSP_BASICRESP *bs);
+ int OCSP_copy_nonce(OCSP_BASICRESP *resp, OCSP_REQUEST *req);
+ 
+ int OCSP_request_set1_name(OCSP_REQUEST *req, X509_NAME *nm);
++int OCSP_request_set1_name_with_requestor(OCSP_REQUEST *req, char *requestorName, char *requestorType);
+ int OCSP_request_add1_cert(OCSP_REQUEST *req, X509 *cert);
+ 
+ int OCSP_request_sign(OCSP_REQUEST *req,
+@@ -252,6 +253,19 @@ int OCSP_request_sign(OCSP_REQUEST *req,
+                       const EVP_MD *dgst,
+                       STACK_OF(X509) *certs, unsigned long flags);
+ 
++int OCSP_request_sign_default_requestor(OCSP_REQUEST *req,
++                                        X509 *signer,
++                                        EVP_PKEY *key,
++                                        const EVP_MD *dgst,
++                                        STACK_OF(X509) *certs, unsigned long flags);
++
++int OCSP_request_sign_custom_requestor(OCSP_REQUEST *req,
++                                       X509 *signer,
++                                       EVP_PKEY *key,
++                                       const EVP_MD *dgst,
++                                       STACK_OF(X509) *certs, unsigned long flags,
++                                       char *requestorName, char * requestorType);
++
+ int OCSP_response_status(OCSP_RESPONSE *resp);
+ OCSP_BASICRESP *OCSP_response_get1_basic(OCSP_RESPONSE *resp);
+ 
+-- 
+2.1.0
+
